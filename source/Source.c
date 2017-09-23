@@ -88,7 +88,7 @@ void hexDump(char *desc, void *addr, int len) {
 		}
 
 		// Now the hex code for the specific character.
-		printf(" %02x", pc[i]);
+			printf(" %02x", pc[i]);
 
 		// And store a printable ASCII character for later.
 		if ((pc[i] < 0x20) || (pc[i] > 0x7e))
@@ -108,6 +108,37 @@ void hexDump(char *desc, void *addr, int len) {
 	printf("  %s\n", buff);
 }
 
+void dumpHex(void* data, size_t size) {
+	char ascii[17];
+	size_t i, j;
+	ascii[16] = '\0';
+	for (i = 0; i < size; ++i) {
+		printf("%02X ", ((unsigned char*)data)[i]);
+		if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
+			ascii[i % 16] = ((unsigned char*)data)[i];
+		}
+		else {
+			ascii[i % 16] = '.';
+		}
+		if ((i + 1) % 8 == 0 || i + 1 == size) {
+			printf(" ");
+			if ((i + 1) % 16 == 0) {
+				printf("|  %s \n", ascii);
+			}
+			else if (i + 1 == size) {
+				ascii[(i + 1) % 16] = '\0';
+				if ((i + 1) % 16 <= 8) {
+					printf(" ");
+				}
+				for (j = (i + 1) % 16; j < 16; ++j) {
+					printf("   ");
+				}
+				printf("|  %s \n", ascii);
+			}
+		}
+	}
+}
+
 
 
 int main(int argc, char *argv[]) {
@@ -123,7 +154,7 @@ int main(int argc, char *argv[]) {
 	//++argv; --argc;
 
 	/* We expect exactly one argument, the name of the file to dump. */
-	char filename[50] = "trace-1.pcap";
+	char filename[50] = "files/trace-13.pcap";
 
 	pcap = pcap_open_offline(filename, errbuf);
 	if (pcap == NULL) {
@@ -136,15 +167,15 @@ int main(int argc, char *argv[]) {
 	*/
 	int counter = 1;
 	unsigned char buffer[2560], my_str[2560];
+	dumpHex(pcap, sizeof(pcap) + 7500);
+	printf("%d\n==========================================\n", sizeof(pcap));
 
-	while ((packet = pcap_next_ex(pcap, &header, &data)) == 1 && counter <= 20) {
+	while ((packet = pcap_next(pcap, &header)) != NULL && counter <= 10) {
 		//dump_UDP_packet(packet, header.ts, header.caplen);
-
-			//dump_UDP_packet(packet, header.ts, header.caplen);
-			
-			hexDump("my_str", &header, 2560);
-
-			printf("%c = %c     udp packet n: %d %d\n", data, my_str, counter, sizeof(header));
+		//dump_UDP_packet(packet, header.ts, header.caplen);
+		//hexDump("my_str", &header, sizeof(header));
+		dumpHex(packet, sizeof(packet) + 150);
+		printf("udp packet number: %d\nsizeof(data): %d\nsizeof(header): %d\n", counter, sizeof(data), sizeof(packet));
 		counter++;
 	}
 

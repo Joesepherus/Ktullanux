@@ -56,14 +56,11 @@ void too_short(struct timeval ts, const char *truncated_hdr);
 * we have to be careful not to read beyond it.
 */
 
-void hexDump(char *desc, void *addr, int len) {
+void hexDump(void *addr, int len) {
 	int i;
 	unsigned char buff[17];
 	unsigned char *pc = (unsigned char*)addr;
 
-	// Output description if given.
-	if (desc != NULL)
-		printf("%s:\n", desc);
 
 	if (len == 0) {
 		printf("  ZERO LENGTH\n");
@@ -87,6 +84,11 @@ void hexDump(char *desc, void *addr, int len) {
 			printf("  %04x ", i);
 		}
 
+		if (i % 8 == 0) {
+			printf(" ");
+		}
+
+
 		// Now the hex code for the specific character.
 			printf(" %02x", pc[i]);
 
@@ -106,6 +108,75 @@ void hexDump(char *desc, void *addr, int len) {
 
 	// And print the final ASCII bit.
 	printf("  %s\n", buff);
+}
+
+void ipDump(void *addr, int len) {
+	int i;
+	unsigned char buff[17];
+	unsigned char *pc = (unsigned char*)addr;
+
+
+	if (len == 0) {
+		printf("  ZERO LENGTH\n");
+		return;
+	}
+
+	if (len < 0) {
+		printf("  NEGATIVE LENGTH: %i\n", len);
+		return;
+	}
+
+	// Process every byte in the data.
+	for (i = 0; i < len; i++) {
+		// Multiple of 16 means new line (with line offset).
+
+		/*if ((i % 16) == 0) {
+			// Just don't print ASCII for the zeroth line.
+			if (i != 0)
+				//printf("  %s\n", buff);
+
+			// Output the offset.
+			//printf("  %04x \n", i);
+		}*/
+
+		/*if (i % 8 == 0) {
+			printf(" ");
+		}*/
+		if (i >= 12 && i < 14) {
+			// Now the hex code for the specific character.
+			if (i != 13) {
+				printf("\n");
+			}
+			else {
+				printf(" ");
+			}
+			printf("%02x", pc[i]);
+		}
+		if (i == 14) {
+			printf("\n");
+		}
+		if (i >= 0 && i < 12 ) {
+			if (i == 8) {
+				printf("\n");
+			}
+			printf("%02x ", pc[i]);
+		}
+		// And store a printable ASCII character for later.
+		if ((pc[i] < 0x20) || (pc[i] > 0x7e))
+			buff[i % 16] = '.';
+		else
+			buff[i % 16] = pc[i];
+		buff[(i % 16) + 1] = '\0';
+	}
+
+	// Pad out last line if not exactly 16 characters.
+	/*while ((i % 16) != 0) {
+		printf("   ");
+		i++;
+	}*/
+
+	// And print the final ASCII bit.
+	//printf("  %s\n", buff);
 }
 
 void dumpHex(void* data, size_t size) {
@@ -139,6 +210,28 @@ void dumpHex(void* data, size_t size) {
 	}
 }
 
+int packet_number = 1;
+
+void print_packet_info(const u_char *packet, struct pcap_pkthdr packet_header) {
+	printf("Packet Number: %d\n", packet_number++);
+	printf("Packet capture length: %d\n", packet_header.caplen);
+	printf("Packet total length %d\n", packet_header.len);
+	printf("\n");
+}
+
+void packet_handler(
+	u_char *args,
+		const struct pcap_pkthdr *packet_header,
+		const u_char *packet_body
+	)
+{
+	ipDump(packet_body, packet_header->len);
+	print_packet_info(packet_body, *packet_header);
+	return;
+}
+
+
+
 
 
 int main(int argc, char *argv[]) {
@@ -154,7 +247,7 @@ int main(int argc, char *argv[]) {
 	//++argv; --argc;
 
 	/* We expect exactly one argument, the name of the file to dump. */
-	char filename[50] = "files/trace-13.pcap";
+	char filename[50] = "files/trace-1.pcap";
 
 	pcap = pcap_open_offline(filename, errbuf);
 	if (pcap == NULL) {
@@ -167,17 +260,22 @@ int main(int argc, char *argv[]) {
 	*/
 	int counter = 1;
 	unsigned char buffer[2560], my_str[2560];
-	dumpHex(pcap, sizeof(pcap) + 7500);
-	printf("%d\n==========================================\n", sizeof(pcap));
+	// hexDump(pcap, sizeof(pcap) + 7500);
+	// printf("%d\n==========================================\n", sizeof(pcap));
 
-	while ((packet = pcap_next(pcap, &header)) != NULL && counter <= 10) {
+	//while ((packet = pcap_next(pcap, &header)) != NULL && counter <= 10) {	
 		//dump_UDP_packet(packet, header.ts, header.caplen);
 		//dump_UDP_packet(packet, header.ts, header.caplen);
 		//hexDump("my_str", &header, sizeof(header));
-		dumpHex(packet, sizeof(packet) + 150);
+		/*dumpHex(packet, sizeof(packet) + 150);
 		printf("udp packet number: %d\nsizeof(data): %d\nsizeof(header): %d\n", counter, sizeof(data), sizeof(packet));
-		counter++;
-	}
+		counter++;*/
+	//}
+	//ipDump(pcap, sizeof(pcap) + 7500);
+
+	pcap_loop(pcap, 0, packet_handler, NULL);
+
+
 
 	// terminate
 	getchar();

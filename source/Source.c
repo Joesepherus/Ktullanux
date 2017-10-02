@@ -3,7 +3,6 @@
 #include <string.h>
 #include "pcap.h"
 
-// ================================================================================================================================================================
 #define GET_SIZE(p) ((sizeof(p)/sizeof(p[0]))
 
 typedef struct icmp {
@@ -20,10 +19,17 @@ typedef struct ip {
 	unsigned char dest_ip[4];
 	unsigned char protocol_ip;
 	unsigned char ip_type[3];
-	struct tcp next;
-	//struct arp arp;
+	struct tcp tcp;
 	struct icmp icmp;
 } IP;
+
+typedef struct arp {
+	unsigned char operation[15];
+	unsigned char source_mac[6];
+	unsigned char source_ip[4];
+	unsigned char dest_mac[6];
+	unsigned char dest_ip[4];
+} ARP;
 
 typedef struct ether {
 	unsigned short id;
@@ -31,19 +37,16 @@ typedef struct ether {
 	unsigned short frame_length_cable;
 	unsigned char source_MA[6];
 	unsigned char dest_MA[6];
-	unsigned char ether_type[4];
-	struct ip next;
+	unsigned char ether_type[15];
+	unsigned char frame_type[15];
+	struct ip ip;
+	struct arp arp;
 	unsigned char hexDump[1500];
 } ETHER;
 
-typedef struct arp {
-	unsigned char operation[4];
-	unsigned char arp_req_ip[8];
-	unsigned char arp_reply_ip[8];
-} ARP;
-
-struct ether ethernets[250];
+struct ether ethernets[12500];
 int main_counter = 0;
+int packet_number = 1;
 
 void printHexa(unsigned char *ptr, int size) {
 	for (int i = 0; i < size; i++) {
@@ -59,34 +62,32 @@ void printEther(struct ether ethernet) {
 	printHexa(ethernet.source_MA, GET_SIZE(ethernet.source_MA)));
 	printHexa(ethernet.dest_MA, GET_SIZE(ethernet.dest_MA)));
 
-	if (strcmp(ethernet.ether_type, "IP") == 0) {
-		printf("%s\n", ethernet.ether_type);
-		printHexa(ethernet.next.dest_ip, GET_SIZE(ethernet.next.dest_ip)));
-		printHexa(ethernet.next.source_ip, GET_SIZE(ethernet.next.source_ip)));
+	if (strcmp(ethernet.frame_type, "Ethernet") == 0) {
+		printf("%s\n", ethernet.frame_type);
+		printHexa(ethernet.ip.dest_ip, GET_SIZE(ethernet.ip.dest_ip)));
+		printHexa(ethernet.ip.source_ip, GET_SIZE(ethernet.ip.source_ip)));
 	}
 
-
-	if (strcmp(ethernet.next.ip_type, "TCP") == 0) {
-		printf("%s\n", ethernet.next.ip_type);
-		printHexa(ethernet.next.next.dest_port, GET_SIZE(ethernet.next.next.dest_port)));
-		printHexa(ethernet.next.next.source_port, GET_SIZE(ethernet.next.next.source_port)));
-	}
-	else if (strcmp(ethernet.next.ip_type, "ICMP") == 0) {
-		printHexa(ethernet.next.icmp.icmp_type, GET_SIZE(ethernet.next.icmp.icmp_type)));
+	if (strcmp(ethernet.ether_type, "ARP") == 0) {
+		printf("%s\n", ethernet.frame_type);
+		printHexa(ethernet.arp.dest_ip, GET_SIZE(ethernet.arp.dest_ip)));
+		printHexa(ethernet.arp.dest_mac, GET_SIZE(ethernet.arp.dest_mac)));
+		printHexa(ethernet.arp.source_ip, GET_SIZE(ethernet.arp.source_ip)));
+		printHexa(ethernet.arp.dest_ip, GET_SIZE(ethernet.arp.dest_ip)));
 	}
 
-
-	// TO DO
-	if (strcmp(ethernet.next.ip_type, "ARP") == 0) {
-
+	if (strcmp(ethernet.ip.ip_type, "TCP") == 0) {
+		printf("%s\n", ethernet.ip.ip_type);
+		printHexa(ethernet.ip.tcp.dest_port, GET_SIZE(ethernet.ip.tcp.dest_port)));
+		printHexa(ethernet.ip.tcp.source_port, GET_SIZE(ethernet.ip.tcp.source_port)));
 	}
-}
-
-void printAllEthers(struct ether *all, int size) {
-	int i;
-	for (i = 0; i < size; i++) {
-		printEther(all[i]);
+	else if (strcmp(ethernet.ip.ip_type, "ICMP") == 0) {
+		printHexa(ethernet.ip.icmp.icmp_type, GET_SIZE(ethernet.ip.icmp.icmp_type)));
 	}
+	/*else if (strcmp(ethernet.next.ip_type, "TFTP") == 0) {
+		printHexa(ethernet.next.tftp.tftp, GET_SIZE(ethernet.next.icmp.icmp_type)));
+	}*/
+
 }
 
 struct ether ether_dump(void *addr, int len, struct ether ethernet) {
@@ -97,7 +98,6 @@ struct ether ether_dump(void *addr, int len, struct ether ethernet) {
 		printf("frames length can't be lower than 1");
 	}
 
-	// Process every byte in the data.
 	for (i = 0; i < 14; i++) {
 		if (i >= 0 && i < 6) {
 			ethernet.dest_MA[i] = pc[i];
@@ -105,13 +105,21 @@ struct ether ether_dump(void *addr, int len, struct ether ethernet) {
 		else if (i >= 6 && i < 12)
 			ethernet.source_MA[i - 6] = pc[i];
 		else if (i >= 12 && i < 14)
-			if (pc[12] > 6 && pc[13] == 0) {
-				strcpy(ethernet.ether_type, "Ethernet");
+			if (pc[12] > 6) {
+				strcpy(ethernet.frame_type, "Ethernet");
+				if (pc[12] == 8 && pc[13] == 6) {
+					strcpy(ethernet.ether_type, "ARP");
+					printf("OOOO\n");
+				}
+				else strcpy(ethernet.ether_type, "IP");
 			}
-			else {
-				strcpy(ethernet.ether_type, "802.2");
+			else if (pc[14] == 272 && pc[15] == 272){
+				strcpy(ethernet.frame_type, "802.2 RAW");
 			}
-		ethernet.hexDump[i] = pc[i];
+			else if (pc[15] == 170)
+				strcpy(ethernet.frame_type, "802.3 - LLC - SNAP");
+			else 
+				strcpy(ethernet.frame_type, "802.3 - LLC");
 	}
 	return ethernet;
 }
@@ -133,21 +141,21 @@ struct ether ip_dump(void *addr, struct ether ethernet) {
 	for (i = 14; i < 34; i++) {
 		if (i == 23) {
 			if (pc[i] == 6) {
-				strcpy(ethernet.next.ip_type, "TCP");
+				strcpy(ethernet.ip.ip_type, "TCP");
 			}
 			else if (pc[i] == 1) {
-				strcpy(ethernet.next.ip_type, "ICMP");
+				strcpy(ethernet.ip.ip_type, "ICMP");
 			}
 			else {
-				strcpy(ethernet.next.ip_type, NULL);
+				strcpy(ethernet.ip.ip_type, "ine");
 			}
 		}
 
 		// ip addresses
 		if (i >= 26 && i < 30)
-			ethernet.next.source_ip[i - 26] = pc[i];
+			ethernet.ip.source_ip[i - 26] = pc[i];
 		if (i >= 30 && i < 34)
-			ethernet.next.dest_ip[i - 30] = pc[i];
+			ethernet.ip.dest_ip[i - 30] = pc[i];
 
 	}
 	return ethernet;
@@ -181,10 +189,31 @@ struct icmp icmp_dump(void *addr) {
 			icmp.icmp_type[i - 34] = p[i];
 		}
 	}
-
 	return icmp;
 }
 
+struct arp arp_dump(void *addr) {
+	int i;
+	unsigned char *p = (unsigned char*)addr;
+	struct arp arp;
+
+	for (i = 14; i < 42; i++) {
+		if (i >= 20 && i < 22)
+			if (p[21] == 1)
+				strcpy(arp.operation, "Request");
+			else
+				strcpy(arp.operation, "Reply");
+		if (i >= 22 && i < 28)
+			arp.source_mac[i - 22] = p[i];
+		if (i >= 28 && i < 34)
+			arp.source_ip[i - 28] = p[i];
+		if (i >= 34 && i < 40)
+			arp.dest_mac[i - 34] = p[i];
+		if (i >= 40 && i < 44)
+			arp.dest_ip[i - 40] = p[i];
+	}
+	return arp;
+}
 
 struct ether dump(void *addr, struct pcap_pkthdr packet_header) {
 	int i;
@@ -193,6 +222,7 @@ struct ether dump(void *addr, struct pcap_pkthdr packet_header) {
 	struct ip ip;
 	struct tcp tcp;
 	struct icmp icmp;
+	struct arp arp;
 	struct ether all_eths[50];
 
 	ethernet.id = main_counter;
@@ -200,34 +230,28 @@ struct ether dump(void *addr, struct pcap_pkthdr packet_header) {
 	ethernet.frame_length_cable = packet_header.caplen;
 
 	ethernet = ether_dump(pc, packet_header.len, ethernet);
-	if (strcmp(ethernet.ether_type, "IP") == 0) {
-		ethernet = ip_dump(pc, ethernet);
+	if (strcmp(ethernet.frame_type, "Ethernet") == 0) {
+		if(strcmp(ethernet.ether_type, "IP") == 0)
+			ethernet = ip_dump(pc, ethernet);
+		if (strcmp(ethernet.ether_type, "ARP") == 0) {
+			arp = arp_dump(pc);
+			ethernet.arp = arp;
+		}
 	}
-	if (strcmp(ethernet.next.ip_type, "TCP") == 0) {
+	if (strcmp(ethernet.ip.ip_type, "TCP") == 0) {
 		tcp = tcp_dump(pc);
-		ethernet.next.next = tcp;
+		ethernet.ip.tcp = tcp;
 	}
-	if (strcmp(ethernet.next.ip_type, "ICMP") == 0) {
+	if (strcmp(ethernet.ip.ip_type, "ICMP") == 0) {
 		icmp = icmp_dump(pc);
-		ethernet.next.icmp = icmp;
+		ethernet.ip.icmp = icmp;
 	}
-	/*printEther(ethernet);
-	printf("\nhexdump\n");
-	printHexa(ethernet.hexDump, GET_SIZE(ethernet.hexDump)));
-	putchar('\n');*/
+
 	ethernet = getHexDump(addr, ethernet);
 	ethernets[main_counter] = ethernet;
 	return ethernet;
 }
 
-int packet_number = 1;
-
-void print_packet_info(const u_char *packet, struct pcap_pkthdr packet_header) {
-	//printf("Packet Number: %d\n", packet_number++);
-	printf("Packet capture length: %d\n", packet_header.caplen);
-	printf("Packet total length %d\n", packet_header.len);
-	printf("\n");
-}
 
 void packet_handler(
 	u_char *args,
@@ -235,65 +259,62 @@ void packet_handler(
 	const u_char *packet_body,
 	int *counter,
 	struct ether ethernets
-	)
-{
-
-	/*ipDump(packet_body, packet_header);
-	print_packet_info(packet_body, *packet_header);*/
+	) {
 	dump(packet_body, *packet_header);
 	main_counter++;
-}
-
-void dumpHex(void* data, size_t size) {
-	char ascii[17];
-	size_t i, j;
-	ascii[16] = '\0';
-	for (i = 0; i < size; ++i) {
-		printf("%02X ", ((unsigned char*)data)[i]);
-		if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
-			ascii[i % 16] = ((unsigned char*)data)[i];
-		}
-		else {
-			ascii[i % 16] = '.';
-		}
-		if ((i + 1) % 8 == 0 || i + 1 == size) {
-			printf(" ");
-			if ((i + 1) % 16 == 0) {
-				printf("|  %s \n", ascii);
-			}
-			else if (i + 1 == size) {
-				ascii[(i + 1) % 16] = '\0';
-				if ((i + 1) % 16 <= 8) {
-					printf(" ");
-				}
-				for (j = (i + 1) % 16; j < 16; ++j) {
-					printf("   ");
-				}
-				printf("|  %s \n", ascii);
-			}
-		}
-	}
 }
 
 void displayTCP(int type) {
 	int counter = 0;
 	while (counter < main_counter) {
-		if (type == 20 && ethernets[counter].next.next.source_port == type) {
-			printf("id = %d\n", counter);
-		}
-		if (type == 22 && (int)ethernets[counter].next.next.source_port == type) {
-			printf("id = %d\n", counter);
-		}
-		if (strcmp(ethernets[counter].next.ip_type, "TCP") == 0 && type == 80 && ethernets[counter].next.next.source_port[0] == 0 && ethernets[counter].next.next.source_port[1] == 80) {
-			printf("id = %d\n", counter);
+		if (strcmp(ethernets[counter].ip.ip_type, "TCP") == 0) {
+			if (ethernets[counter].ip.tcp.source_port[0] == 0 && ethernets[counter].ip.tcp.source_port[1] == type) {
+				printf("id = %d\n", counter);
+			}
 		}
 		counter++;
 	}
 }
 
+void displayARP(int i, int *arp_count) {
+	printf("Komunikacia c. %d\n", *arp_count);
+	printf("%ARP - %s\n", ethernets[i].arp.operation);
+	printf("IP adresa: ");
+	printHexa(ethernets[i].arp.dest_ip, GET_SIZE(ethernets[i].arp.dest_ip)));
+	printf("MAC adresa: ");
+	printHexa(ethernets[i].arp.dest_mac, GET_SIZE(ethernets[i].arp.dest_mac)));
+	printf("Zdrojova IP: ");
+	printHexa(ethernets[i].arp.source_ip, GET_SIZE(ethernets[i].arp.source_ip)));
+	printf("Cielova IP: ");
+	printHexa(ethernets[i].arp.dest_ip, GET_SIZE(ethernets[i].arp.dest_ip)));
+	*arp_count++;
+}
+
+void displayARPAll() {
+	int i = 0, arp_count = 0;
+	while (i < main_counter) {
+		if (strcmp(ethernets[i].ether_type, "ARP") == 0) {
+			printf("Komunikacia c. %d\n", arp_count);
+			printf("ARP - %s\n", ethernets[i].arp.operation);
+			printf("IP adresa: ");
+			printHexa(ethernets[i].arp.dest_ip, GET_SIZE(ethernets[i].arp.dest_ip)));
+			printf("MAC adresa: ");
+			printHexa(ethernets[i].arp.dest_mac, GET_SIZE(ethernets[i].arp.dest_mac)));
+			printf("Zdrojova IP: ");
+			printHexa(ethernets[i].arp.source_ip, GET_SIZE(ethernets[i].arp.source_ip)));
+			printf("Cielova IP: ");
+			printHexa(ethernets[i].arp.dest_ip, GET_SIZE(ethernets[i].arp.dest_ip)));
+			arp_count++;
+		}
+		i++;
+	}
+}
+
 void displayAll() {
-	int counter = 0;
+	int counter = 0, arp_count = 0;
 	while (counter < main_counter) {
+		if (strcmp(ethernets[counter].ether_type, "ARP") == 0)
+			displayARP(counter, &arp_count);
 		printf("Ramec %d\n", ethernets[counter].id);
 		printf("Dlzka ramca poskytnuta pcap API - %d\n", ethernets[counter].frame_length_pcap);
 		printf("Dlzka ramca prenasaneho po mediu - %d\n", ethernets[counter].frame_length_cable);
@@ -308,7 +329,6 @@ void displayAll() {
 	}
 }
 
-
 int main(int argc, char *argv[]) {
 	pcap_t *pcap;
 	const unsigned char *packet;
@@ -317,27 +337,13 @@ int main(int argc, char *argv[]) {
 	const u_char * data[2560];
 
 	char c;
-	char filename[50] = "files/trace-1.pcap";
+	char filename[50] = "files/trace-14.pcap";
 
 	pcap = pcap_open_offline(filename, errbuf);
 	if (pcap == NULL) {
 		fprintf(stderr, "error reading pcap file: %s\n", errbuf);
 		exit(1);
 	}
-
-	/*while ((packet = pcap_next(pcap, &header)) != NULL) {	
-		dumpHex(packet, sizeof(packet) + 150);
-		counter++;
-	}*/
-
-	pcap_close(pcap);
-
-	pcap = pcap_open_offline(filename, errbuf);
-	if (pcap == NULL) {
-		fprintf(stderr, "error reading pcap file: %s\n", errbuf);
-		exit(1);
-	}
-	int counter2 = 0;
 
 	pcap_loop(pcap, 0, packet_handler, NULL);
 	pcap_close(pcap);
@@ -362,12 +368,12 @@ int main(int argc, char *argv[]) {
 		switch (choice) {
 			case 0: displayAll(); break;
 			case 1: displayTCP(80); break;
-			case 2: displayTCP("HTTPS"); break;
-			case 3: displayTCP("TELNET"); break;
+			case 2: displayTCP(443); break;
+			case 3: displayTCP(23); break;
 			case 4: displayTCP(22); break;
 			case 5: displayTCP(20); break;
-			case 6: displayTCP("FTP CONTROL"); break;
-			case 7: displayTCP("TFTP"); break;
+			case 6: displayTCP(21); break;
+			case 9: displayARPAll(); break;
 		}
 
 	} while (choice != 10);

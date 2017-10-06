@@ -109,17 +109,20 @@ struct ether ether_dump(void *addr, int len, struct ether ethernet) {
 				strcpy(ethernet.frame_type, "Ethernet");
 				if (pc[12] == 8 && pc[13] == 6) {
 					strcpy(ethernet.ether_type, "ARP");
-					printf("OOOO\n");
+					//printf("OOOO\n");
 				}
 				else strcpy(ethernet.ether_type, "IP");
 			}
-			else if (pc[14] == 272 && pc[15] == 272){
-				strcpy(ethernet.frame_type, "802.2 RAW");
+			else {
+				strcpy(ethernet.frame_type, "802.3");
+				if (pc[14] == 255 && pc[15] == 255) {
+					strcpy(ethernet.frame_type, "802.3 RAW");
+				}
+				else if (pc[15] == 170)
+					strcpy(ethernet.frame_type, "802.3 - LLC - SNAP");
+				else
+					strcpy(ethernet.frame_type, "802.3 - LLC");
 			}
-			else if (pc[15] == 170)
-				strcpy(ethernet.frame_type, "802.3 - LLC - SNAP");
-			else 
-				strcpy(ethernet.frame_type, "802.3 - LLC");
 	}
 	return ethernet;
 }
@@ -127,9 +130,8 @@ struct ether ether_dump(void *addr, int len, struct ether ethernet) {
 struct ether getHexDump(void *addr, struct ether ethernet) {
 	unsigned char *pc = (unsigned char*)addr;
 	int i;
-	for (i = 0; i < ethernet.frame_length_cable; i++) {
+	for (i = 0; i < ethernet.frame_length_pcap; i++) 
 		ethernet.hexDump[i] = pc[i];
-	}
 	return ethernet;
 }
 
@@ -226,10 +228,14 @@ struct ether dump(void *addr, struct pcap_pkthdr packet_header) {
 	struct ether all_eths[50];
 
 	ethernet.id = main_counter;
-	ethernet.frame_length_pcap = packet_header.len;
-	ethernet.frame_length_cable = packet_header.caplen;
 
 	ethernet = ether_dump(pc, packet_header.len, ethernet);
+	if (packet_header.len + 4 < 64) 
+		ethernet.frame_length_pcap= 64;
+	else ethernet.frame_length_pcap = packet_header.caplen;
+
+	ethernet.frame_length_cable = ethernet.frame_length_pcap + 4;
+
 	if (strcmp(ethernet.frame_type, "Ethernet") == 0) {
 		if(strcmp(ethernet.ether_type, "IP") == 0)
 			ethernet = ip_dump(pc, ethernet);
@@ -311,19 +317,22 @@ void displayARPAll() {
 }
 
 void displayAll() {
-	int counter = 0, arp_count = 0;
+	int counter = 0, arp_count = 0, size;
+	printf("Zadaj pocet vypisaneho hex dumpu, pre vypis celeho stlac 0\n");
+	scanf("%d", &size);
 	while (counter < main_counter) {
 		if (strcmp(ethernets[counter].ether_type, "ARP") == 0)
 			displayARP(counter, &arp_count);
 		printf("Ramec %d\n", ethernets[counter].id);
 		printf("Dlzka ramca poskytnuta pcap API - %d\n", ethernets[counter].frame_length_pcap);
 		printf("Dlzka ramca prenasaneho po mediu - %d\n", ethernets[counter].frame_length_cable);
-		printf("%s\n", ethernets[counter].ether_type);
+		printf("%s\n", ethernets[counter].frame_type);
 		printf("Zdrojova MAC adresa: ");
 		printHexa(ethernets[counter].source_MA, GET_SIZE(ethernets[counter].source_MA)));
 		printf("Cielova MAC adresa: ");
 		printHexa(ethernets[counter].dest_MA, GET_SIZE(ethernets[counter].dest_MA)));
-		printHexa(ethernets[counter].hexDump, ethernets[counter].frame_length_pcap);
+		if (size == 0) printHexa(ethernets[counter].hexDump, ethernets[counter].frame_length_pcap);
+		else printHexa(ethernets[counter].hexDump, size);
 		counter++;
 		putchar('\n');
 	}
@@ -337,7 +346,7 @@ int main(int argc, char *argv[]) {
 	const u_char * data[2560];
 
 	char c;
-	char filename[50] = "files/trace-14.pcap";
+	char filename[50] = "files/trace-25.pcap";
 
 	pcap = pcap_open_offline(filename, errbuf);
 	if (pcap == NULL) {

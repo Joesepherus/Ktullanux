@@ -11,13 +11,35 @@ Simple UDP Server
 #define PORT 8888   //The port on which to listen for incoming data
 #define SERVER "127.0.0.1"  //ip address of udp server
 
+#define HEADER_BASIC 12
+#define HEADER_ACK 16
+#define HEADER_INIT 20
+
+// basic message
 typedef struct message {
 	int fragment_id;
-	int number_of_packets;
 	int type;
 	int checksum;
 	char *data;
 } MESSAGE;
+
+// ack, nack
+typedef struct ack {
+	int fragment_id;
+	int type;
+	int checksum;
+	int checked_fragment_id;
+} ACK;
+
+// init basic message, init file message
+typedef struct init{
+	int fragment_id;
+	int type;
+	int checksum;
+	int number_of_packets;
+	int packet_size;
+} INIT;
+
 
 const unsigned char CRC7_POLY = 0x91;
 
@@ -38,8 +60,7 @@ unsigned char getCRC(char message[], unsigned char length)
 	return crc;
 }
 
-
-MESSAGE* listen_to_messages(int s, int slen) {
+MESSAGE* listen_message(int s, int slen, int frag_size) {
 	struct sockaddr_in si_other;
 	char buf[1000];
 	int recv_len;
@@ -62,21 +83,98 @@ MESSAGE* listen_to_messages(int s, int slen) {
 	//MESSAGE *m = (MESSAGE*)malloc(sizeof(MESSAGE));
 	MESSAGE* m = (MESSAGE*)malloc(sizeof(MESSAGE));
 	m->fragment_id = (int)(buf[0]);
-	m->number_of_packets = (int)(buf[4]);
-	m->type = (int)(buf[8]);
-	m->data = (char*)(&buf[12]);
+	m->type = (int)(buf[4]);
+	m->data = (char*)(&buf[8]);
 	printf("%d", strlen(m->data));
- 	m->data[strlen(m->data)] = '\0';
+	m->data[strlen(m->data)] = '\0';
+	m->checksum = (int)(buf[HEADER_BASIC + frag_size - 4]);
 	//char *data = (char*)(&buf[12]);
 
-	//now reply the client with the same data
+	// ack initialize
+	ACK* m2 = (ACK*)malloc(sizeof(ACK));
+	m2->fragment_id = 25156;
+	m2->type = 4;
+	m2->checksum = (int)(buf[HEADER_BASIC]);
+
+	int *intlocation = (int*)(&m2[0]);
+	*intlocation = m->fragment_id; // stores 3632
+	intlocation = (int*)(&m2[8]);
+	*intlocation = m->type;
+	/*intlocation = (int*)(&m2[16]);
+	int crc = getCRC(buf, HEADER_ACK - 4);*/
+	int crc = getCRC(buf, HEADER_BASIC - 4);
+
+	if (m->checksum != crc)
+		*intlocation = -1;
+	else *intlocation = m->fragment_id;
+
+	// send ACK OR NACK
 	while (1)
-		if (sendto(s, buf, recv_len, 0, (struct sockaddr*) &si_other, slen) == SOCKET_ERROR)
+		if (sendto(s, (CHAR*)m2, HEADER_ACK, 0, (struct sockaddr*) &si_other, slen) == SOCKET_ERROR)
 		{
 			printf("sendto() failed with error code : %d", WSAGetLastError());
 		}
 		else break;
 		return m;
+}
+
+INIT* listen_init(int s, int slen) {
+	struct sockaddr_in si_other;
+	char buf[1000];
+	int recv_len;
+	printf("Waiting for data...");
+	fflush(stdout);
+
+	//clear the buffer by filling null, it might have previously received data
+	memset(buf, '\0', BUFLEN);
+
+	//try to receive some data, this is a blocking call
+
+	if ((recv_len = recvfrom(s, buf, 1000, 0, (struct sockaddr *) &si_other, &slen)) == SOCKET_ERROR)
+	{
+		printf("recvfrom() failed with error code : %d", WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+
+	//print details of the client/peer and the data received
+	printf("Received packet from %s:%d\n", inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port));
+	//MESSAGE *m = (MESSAGE*)malloc(sizeof(MESSAGE));
+	INIT* m = (INIT*)malloc(sizeof(INIT));
+	int *intlocation = (int*)(&buf[0]);
+	m->fragment_id = *intlocation;
+	m->number_of_packets = (int)(buf[4]);
+	m->type = (int)(buf[8]);
+	m->packet_size = (int)(buf[12]);
+	m->checksum = (int)(buf[20]);
+
+	int crc = getCRC(buf, HEADER_INIT - 4);
+
+	// ack initialize
+	/*ACK* m2 = (ACK*)malloc(sizeof(ACK));
+	m2->fragment_id = 25156;
+	m2->type = 4;
+	m2->checksum = (int)(buf[12]);*/
+	char m1[1000];
+	intlocation = (int*)(&m1[0]);
+	*intlocation = 1458;
+	intlocation = (int*)(&m1[8]);
+	*intlocation = 7;
+	intlocation = (int*)(&m1[16]);
+	//crc = getCRC(m1, HEADER_INIT - 4);
+	//*intlocation = crc;
+
+	if (m->checksum != crc) 
+		*intlocation = -1;
+	else *intlocation = m->fragment_id;
+
+	// send ACK OR NACK
+	while (1)
+		if (sendto(s, (CHAR*)m1, HEADER_INIT, 0, (struct sockaddr*) &si_other, slen) == SOCKET_ERROR)
+		{
+			printf("sendto() failed with error code : %d", WSAGetLastError());
+		}
+		else break;
+	return m;
 }
 
 char* stradd(const char* a, const char* b) {
@@ -129,21 +227,23 @@ void server() {
 	int counter, packets;
 	char *message = (char*)malloc(sizeof(char)*1000);
 	memset(message, '\0', BUFLEN);
-	MESSAGE* m = (MESSAGE*)malloc(sizeof(MESSAGE));
+	INIT* m = (INIT*)malloc(sizeof(INIT));
+	MESSAGE* m1 = (MESSAGE*)malloc(sizeof(MESSAGE));
 	//keep listening for data
 	while (1)
 	{
+		
+		m = listen_init(s, slen);
 
-		m = listen_to_messages(s, slen);
-
+		// if the first message was a init message then start accepting/receiveing the number of messages specified by the init message
 		if (m->type == 9) break;
 		else if (m->type == 7) {
 			packets = m->number_of_packets;
 			counter = 0;
 			memset(message, '\0', 1000);
 			while (counter < packets) {
-				m = listen_to_messages(s, slen);
-				strcpy(message, stradd(message, m->data));
+				m1 = listen_message(s, slen, m->packet_size);
+				strcpy(message, stradd(message, m1->data));
 				counter++;
 			}
 			printf("%s", message);
@@ -191,9 +291,10 @@ unsigned int round_closest(unsigned int dividend, unsigned int divisor) {
 }
 
 void send_text(int s, struct sockaddr_in si_other, int slen) {
-	int frag_size, header_size = 16, count, i = 0;
+	int frag_size, count, i = 0;
 	char m1[1000];
 	char message[1000], buf[1000];
+
 	printf("Enter message : ");
 	getchar();
 	fgets(message, 1000, stdin);
@@ -203,32 +304,53 @@ void send_text(int s, struct sockaddr_in si_other, int slen) {
 	count = strlen(message);
 
 	MESSAGE *m = (MESSAGE*)malloc(sizeof(MESSAGE));
+	m->fragment_id = 1457;
 
-	int *intlocation = (int*)(&m1[8]);
+	int *intlocation = (int*)(&m1[0]);
+	*intlocation = 1457;
+	intlocation = (int*)(&m1[8]);
 	*intlocation = 7;
 	intlocation = (int*)(&m1[4]);
 	*intlocation = round_closest(count, frag_size);
-	if (sendto(s, (CHAR*)m1, frag_size + header_size, 0, (struct sockaddr *) &si_other, slen) == SOCKET_ERROR)
+	intlocation = (int*)(&m1[12]);
+	*intlocation = frag_size;
+	intlocation = (int*)(&m1[20]);
+	int crc = getCRC(m1, HEADER_INIT - 4);
+	*intlocation = crc;
+	if (sendto(s, (CHAR*)m1, frag_size + HEADER_INIT, 0, (struct sockaddr *) &si_other, slen) == SOCKET_ERROR)
 	{
 		printf("sendto() failed with error code : %d", WSAGetLastError());
 		exit(EXIT_FAILURE);
 	}
 
-	//receive a reply and print it
+	// receive an ACK from server
 	//clear the buffer by filling null, it might have previously received data
 	memset(buf, '\0', 1000);
 	//try to receive some data, this is a blocking call
 	while (1) {
 		if (recvfrom(s, buf, 1000, 0, (struct sockaddr *) &si_other, &slen) == SOCKET_ERROR)
 		{
+			continue;
 			// printf("recvfrom() failed with error code : %d" , WSAGetLastError());
 		}
-		else break;
+		printf("Received packet from %s:%d\n", inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port));
+		//MESSAGE *m = (MESSAGE*)malloc(sizeof(MESSAGE));
+		ACK*m2 = (ACK*)malloc(sizeof(ACK));
+		int *intlocation = (int*)(&buf[16]);
+		m2->checked_fragment_id = *intlocation;
+		if (m2->checked_fragment_id == m->fragment_id) { 
+			break; 
+		}
+		else {
+			printf("faulty packet, need to send it again");
+			if (sendto(s, (CHAR*)m1, frag_size + HEADER_INIT, 0, (struct sockaddr *) &si_other, slen) == SOCKET_ERROR)
+			{
+				printf("sendto() failed with error code : %d", WSAGetLastError());
+				exit(EXIT_FAILURE);
+			}
+		}
 	}
-
-
-
-
+	
 	while (count >= 0) {
 		memset(m1, '\0', 1000);
 		count -= frag_size;
@@ -237,17 +359,19 @@ void send_text(int s, struct sockaddr_in si_other, int slen) {
 		m->data = message;
 		intlocation = (int*)(&m1[0]);
 		*intlocation = m->fragment_id; // stores 3632
-		intlocation = (int*)(&m1[8]);
+		intlocation = (int*)(&m1[4]);
 		*intlocation = m->type;
 		//char** data_location = (char**)(&m1[12]);
-		strncpy((char*)&m1[12], m->data + i * frag_size, frag_size);
+		strncpy((char*)&m1[8], m->data + i * frag_size, frag_size);
 		unsigned char message[3] = { 0x83, 0x01, 0x00 };
-		int crc = getCRC(m1, header_size + frag_size);
+		crc = getCRC(m1, HEADER_BASIC + frag_size - 4);
+		intlocation = (int*)(&m1[HEADER_BASIC + frag_size - 4]);
+		*intlocation = crc;
 		i++;
 		//*data_location = m->data;
 		//printf("%s %d %s", m1, strlen((CHAR*)m1));
 		//send the message
-		if (sendto(s, (CHAR*)m1, frag_size + header_size, 0, (struct sockaddr *) &si_other, slen) == SOCKET_ERROR)
+		if (sendto(s, (CHAR*)m1, frag_size + HEADER_BASIC, 0, (struct sockaddr *) &si_other, slen) == SOCKET_ERROR)
 		{
 			printf("sendto() failed with error code : %d", WSAGetLastError());
 			exit(EXIT_FAILURE);
